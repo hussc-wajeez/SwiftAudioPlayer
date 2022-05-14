@@ -595,6 +595,24 @@ extension SAPlayer: SAPlayerDelegate {
         let seekToNeedle = needle < 0 ? 0 : needle
         player?.seek(toNeedle: seekToNeedle)
     }
+
+    public func playNextAudioIfExists() {
+        presenter.playNextAudioIfExists()
+    }
+
+    public func playPreviousAudioIfExists() {
+        presenter.playPreviousAudioIfExists()
+    }
+
+    public func playExistingAudio(with url: URL) {
+        presenter.playExistingAudio(with: url)
+    }
+
+    public func setAudioQueue(items: [SAAudioQueueItem],
+                              initialIndex: Int,
+                              playsWhenReady: Bool) {
+        presenter.setAudioQueue(items: items, initialIndex: initialIndex, playsWhenReady: playsWhenReady)
+    }
 }
 
 

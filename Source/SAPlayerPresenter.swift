@@ -30,123 +30,145 @@ import MediaPlayer
 class SAPlayerPresenter {
     weak var delegate: SAPlayerDelegate?
     var shouldPlayImmediately = false //for auto-play
-    
+
     var needle: Needle?
     var duration: Duration?
-    
+
     private var key: String?
     private var isPlaying: SAPlayingStatus = .buffering
-    
+
     private var urlKeyMap: [Key: URL] = [:]
-    
+
     var durationRef: UInt = 0
     var needleRef: UInt = 0
     var playingStatusRef: UInt = 0
     var audioQueue: [SAAudioQueueItem] = []
-    
+
+    var untouchedAudioQueue: [SAAudioQueueItem] = []
+    var currentlyPlayingAudioItem: URL?
+
     init(delegate: SAPlayerDelegate?) {
         self.delegate = delegate
 
         durationRef = AudioClockDirector.shared.attachToChangesInDuration(closure: { [weak self] (duration) in
             guard let self = self else { throw DirectorError.closureIsDead }
-            
+
             self.delegate?.updateLockScreenPlaybackDuration(duration: duration)
             self.duration = duration
-            
+
             self.delegate?.setLockScreenInfo(withMediaInfo: self.delegate?.mediaInfo, duration: duration)
         })
-        
+
         needleRef = AudioClockDirector.shared.attachToChangesInNeedle(closure: { [weak self] (needle) in
             guard let self = self else { throw DirectorError.closureIsDead }
-            
+
             self.needle = needle
             self.delegate?.updateLockScreenElapsedTime(needle: needle)
         })
-        
+
         playingStatusRef = AudioClockDirector.shared.attachToChangesInPlayingStatus(closure: { [weak self] (isPlaying) in
             guard let self = self else { throw DirectorError.closureIsDead }
-            
+
             if(isPlaying == .paused && self.shouldPlayImmediately) {
                 self.shouldPlayImmediately = false
                 self.handlePlay()
             }
-            
+
             // solves bug nil == owningEngine || GetEngine() == owningEngine where too many
             // ended statuses were notified to cause 2 engines to be initialized and causes an error.
             // TODO don't need guard
             guard isPlaying != self.isPlaying else { return }
             self.isPlaying = isPlaying
-            
+
             if(self.isPlaying == .ended) {
                 self.playNextAudioIfExists()
             }
         })
     }
-    
+
     func getUrl(forKey key: Key) -> URL? {
         return urlKeyMap[key]
     }
-    
+
     func addUrlToKeyMap(_ url: URL) {
         urlKeyMap[url.key] = url
     }
-    
+
     func handleClear() {
         delegate?.clearEngine()
         AudioClockDirector.shared.resetCache()
-        
+
         needle = nil
         duration = nil
         key = nil
         delegate?.mediaInfo = nil
         delegate?.clearLockScreenInfo()
     }
-    
+
     func handlePlaySavedAudio(withSavedUrl url: URL) {
+        currentlyPlayingAudioItem = url
         resetCacheForNewAudio(url: url)
         delegate?.setLockScreenControls(presenter: self)
         delegate?.startAudioDownloaded(withSavedUrl: url)
     }
-    
+
     func handlePlayStreamedAudio(withRemoteUrl url: URL, bitrate: SAPlayerBitrate) {
+        currentlyPlayingAudioItem = url
         resetCacheForNewAudio(url: url)
         delegate?.setLockScreenControls(presenter: self)
         delegate?.startAudioStreamed(withRemoteUrl: url, bitrate: bitrate)
     }
-    
+
+    func setAudioQueue(items: [SAAudioQueueItem],
+                       initialIndex: Int,
+                       playsWhenReady: Bool) {
+
+        self.untouchedAudioQueue = items
+        self.audioQueue = items
+        self.shouldPlayImmediately = playsWhenReady
+
+        self.audioQueue = Array(items.dropFirst(initialIndex))
+        self.playNextAudioIfExists()
+    }
+
     private func resetCacheForNewAudio(url: URL) {
         self.key = url.key
         urlKeyMap[url.key] = url
-        
+
         AudioClockDirector.shared.setKey(url.key)
         AudioClockDirector.shared.resetCache()
     }
-    
+
     func handleQueueStreamedAudio(withRemoteUrl url: URL, mediaInfo: SALockScreenInfo?, bitrate: SAPlayerBitrate) {
-        audioQueue.append(SAAudioQueueItem(loc: .remote, url: url, mediaInfo: mediaInfo, bitrate: bitrate))
+        let item = SAAudioQueueItem(loc: .remote, url: url, mediaInfo: mediaInfo, bitrate: bitrate)
+        audioQueue.append(item)
+        untouchedAudioQueue.append(item)
     }
-    
+
     func handleQueueSavedAudio(withSavedUrl url: URL, mediaInfo: SALockScreenInfo?) {
-        audioQueue.append(SAAudioQueueItem(loc: .saved, url: url, mediaInfo: mediaInfo))
+
+        let item = SAAudioQueueItem(loc: .saved, url: url, mediaInfo: mediaInfo)
+        audioQueue.append(item)
+        untouchedAudioQueue.append(item)
     }
-    
+
     func handleRemoveFirstQueuedItem() -> URL? {
         guard audioQueue.count != 0 else { return nil }
-        
         return audioQueue.remove(at: 0).url
     }
-    
+
     func handleClearQueued() -> [URL] {
         guard audioQueue.count != 0 else { return [] }
-        
+
         let urls = audioQueue.map { item in
             return item.url
         }
-        
+
         audioQueue = []
+        untouchedAudioQueue = []
         return urls
     }
-    
+
     func handleStopStreamingAudio() {
         delegate?.clearEngine()
         AudioClockDirector.shared.resetCache()
@@ -168,7 +190,7 @@ extension SAPlayerPresenter {
     func handleAudioRateChanged(rate: Float) {
         delegate?.updateLockScreenChangePlaybackRate(speed: rate)
     }
-    
+
     func handleScrubbingIntervalsChanged() {
         delegate?.updateLockScreenSkipIntervals()
     }
@@ -176,7 +198,7 @@ extension SAPlayerPresenter {
 
 //MARK:- For lock screen
 extension SAPlayerPresenter : LockScreenViewPresenter {
-    
+
     func getIsPlaying() -> Bool {
         return isPlaying == .playing
     }
@@ -195,7 +217,7 @@ extension SAPlayerPresenter : LockScreenViewPresenter {
         guard let backward = delegate?.skipForwardSeconds else { return }
         handleSeek(toNeedle: (needle ?? 0) - backward)
     }
-    
+
     func handleSkipForward() {
         guard let forward = delegate?.skipForwardSeconds else { return }
         handleSeek(toNeedle: (needle ?? 0) + forward)
@@ -225,11 +247,11 @@ extension SAPlayerPresenter {
 
         Log.info("getting ready to play \(nextAudioURL)")
         AudioQueueDirector.shared.changeInQueue(url: nextAudioURL.url)
-        
+
         handleClear()
-        
+
         delegate?.mediaInfo = nextAudioURL.mediaInfo
-        
+
         switch nextAudioURL.loc {
         case .remote:
             handlePlayStreamedAudio(withRemoteUrl: nextAudioURL.url, bitrate: nextAudioURL.bitrate)
@@ -238,7 +260,40 @@ extension SAPlayerPresenter {
             handlePlaySavedAudio(withSavedUrl: nextAudioURL.url)
             break
         }
-        
+
         shouldPlayImmediately = true
+    }
+
+    func playPreviousAudioIfExists() {
+        guard untouchedAudioQueue.count > 0 else {
+            Log.info("no queued audio")
+            return
+        }
+
+        guard let currentIndex = (untouchedAudioQueue.firstIndex { $0.url == currentlyPlayingAudioItem }) else {
+            Log.info("no current playing item found")
+            return
+        }
+
+        if currentIndex == 0 {
+            Log.info("no previous item found")
+            return
+        }
+
+        // we wanna modify the audio queue
+        let currentItem = untouchedAudioQueue[currentIndex]
+        let nextItem = untouchedAudioQueue[currentIndex - 1] // previous item
+
+        audioQueue.insert(currentItem, at: 0)
+        audioQueue.insert(nextItem, at: 0)
+
+        self.playNextAudioIfExists()
+    }
+
+    func playExistingAudio(with url: URL) {
+        // here, we wanna remove all the previous items until we reach that speicifc index.
+        guard audioQueue.count > 0 else { return }
+
+
     }
 }
