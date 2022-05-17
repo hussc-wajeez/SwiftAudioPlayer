@@ -128,7 +128,8 @@ class SAPlayerPresenter {
         self.shouldPlayImmediately = playsWhenReady
 
         self.audioQueue = Array(items.dropFirst(initialIndex))
-        self.playNextAudioIfExists()
+        let firstAudio = self.audioQueue.removeFirst()
+        handlePlayStreamedAudio(withRemoteUrl: firstAudio.url, bitrate: firstAudio.bitrate)
     }
 
     private func resetCacheForNewAudio(url: URL) {
@@ -288,12 +289,5 @@ extension SAPlayerPresenter {
         audioQueue.insert(nextItem, at: 0)
 
         self.playNextAudioIfExists()
-    }
-
-    func playExistingAudio(with url: URL) {
-        // here, we wanna remove all the previous items until we reach that speicifc index.
-        guard audioQueue.count > 0 else { return }
-
-
     }
 }
